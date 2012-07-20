@@ -4,7 +4,6 @@ import (
 	"io"
 	"os"
 	"fmt"
-	"nbt"
 	"sort"
 	"math"
 	"time"
@@ -19,6 +18,7 @@ import (
 	"compress/zlib"
 	"path/filepath"
 	"encoding/binary"
+	"github.com/bemasher/GoNBT"
 )
 
 const (
