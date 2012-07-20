@@ -4,14 +4,14 @@ import (
 	"io"
 	"os"
 	"fmt"
-	"sort"
+	"flag"
 	"math"
+	"sort"
 	"time"
 	"bytes"
 	"image"
 	"runtime"
 	"image/png"
-	"errhandler"
 	"image/draw"
 	"image/color"
 	"encoding/gob"
@@ -19,13 +19,13 @@ import (
 	"path/filepath"
 	"encoding/binary"
 	"github.com/bemasher/GoNBT"
+	"github.com/bemasher/errhandler"
 )
 
 const (
-	DIR = `C:\Users\bemasher\Desktop\Other\Minecraft\world`
-	// DIR = `small`
+	DIR = `world`
 	GLOBPATTERN = "region/*.mca"
-	IMGFILE = "iso.png"
+	IMGFILE = "map.png"
 	BLOCKCOLORSFILE = "blocks.gob"
 	
 	DIM = 1024
@@ -303,10 +303,27 @@ func init() {
 func main() {
 	defer func() {
 		recover()
+		fmt.Println()
+		flag.Usage()
+		os.Exit(1)
 	}()
+	
+	var dir, outFilename string
+	flag.StringVar(&dir, "dir", DIR, "Read region files from the world at this directory.")
+	flag.StringVar(&outFilename, "out", IMGFILE, "Write the rendered image to this file.")
+	
+	flag.Parse()
+	
+	_, err := os.Stat(dir)
+	errhandler.Handle("Error statting directory: ", err)
+	
+	imgFile, err := os.Create(outFilename)
+	errhandler.Handle("Error creating image file: ", err)
+	defer imgFile.Close()
+	
 	start := time.Now()
 	
-	files, err := filepath.Glob(filepath.Join(DIR, GLOBPATTERN))
+	files, err := filepath.Glob(filepath.Join(dir, GLOBPATTERN))
 	errhandler.Handle("Error globbing region files: ", err)
 	
 	var (
@@ -383,10 +400,6 @@ func main() {
 	fmt.Printf("Render time: %+v\n", stop)
 	
 	fmt.Printf("Rendered image dimensions: %+v\n", chunkBounds.Size())
-	
-	imgFile, err := os.Create(IMGFILE)
-	errhandler.Handle("Error creating image file: ", err)
-	defer imgFile.Close()
 	
 	fmt.Println("Committing image to disk...")
 	png.Encode(imgFile, img.SubImage(chunkBounds))
