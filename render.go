@@ -37,12 +37,27 @@ var (
 	blockColors map[byte]BlockColor
 )
 
-type Reverse struct {
-	sort.Interface
+type Positioner interface {
+	GetPos() (int, int)
 }
 
-func (r Reverse) Less(i, j int) bool {
-	return r.Interface.Less(j, i)
+type PositionList []Positioner
+
+func (pl PositionList) Len() int {
+	return len(pl)
+}
+
+func (pl PositionList) Less(i, j int) bool {
+	xi, zi := pl[i].GetPos()
+	xj, zj := pl[j].GetPos()
+	if zi == zj {
+		return xj < xi
+	}
+	return zi < zj
+}
+
+func (pl PositionList) Swap(i, j int) {
+	pl[i], pl[j] = pl[j], pl[i]
 }
 
 type Region struct {
@@ -57,29 +72,16 @@ func NewRegion(file string) Region {
 	return r
 }
 
+func (r Region) GetPos() (int, int) {
+	return int(r.X), int(r.Z)
+}
+
 func (r Region) Bounds() image.Rectangle {
 	xr0, zr0 := r.X << 9, r.Z << 9
 	xr1, zr1 := (r.X + 1) << 9, (r.Z + 1) << 9
 	x0, y0 := xr0 << 1 + zr0 << 1, -xr0 + zr1
 	x1, y1 := xr1 << 1 + zr1 << 1, -xr1 - 512 + zr0
 	return image.Rect(x0 - 2, y0 + 2, x1 - 2, y1)
-}
-
-type RegionList []Region
-
-func (rl RegionList) Len() int {
-	return len(rl)
-}
-
-func (rl RegionList) Less(i, j int) bool {
-	if rl[i].Z == rl[j].Z {
-		return rl[j].X < rl[i].X
-	}
-	return rl[i].Z < rl[j].Z
-}
-
-func (rl RegionList) Swap(i, j int) {
-	rl[i], rl[j] = rl[j], rl[i]
 }
 
 type Header struct {
@@ -117,23 +119,6 @@ type Level struct {
 	Sections []Section
 }
 
-type ChunkList []Level
-
-func (rl ChunkList) Len() int {
-	return len(rl)
-}
-
-func (rl ChunkList) Less(i, j int) bool {
-	if rl[i].Z == rl[j].Z {
-		return rl[j].X < rl[i].X
-	}
-	return rl[i].Z < rl[j].Z
-}
-
-func (rl ChunkList) Swap(i, j int) {
-	rl[i], rl[j] = rl[j], rl[i]
-}
-
 type Section struct {
 	Y byte
 	Data []byte
@@ -148,24 +133,18 @@ func (s Section) Block(x, y, z int) byte {
 	return s.Blocks[(y * 16 + z) * 16 + x]
 }
 
-func (c Level) String() string {
+func (l Level) String() string {
 	return fmt.Sprintf("{X: %d Z: %d LastUpdate: %d TerrainPopulated: %d HeightMap: %d...}",
-		c.X, c.Z,
-		c.LastUpdate,
-		c.TerrainPopulated,
-		c.HeightMap[:Min(6, len(c.HeightMap))],
-		// c.Sections[:Min(6, len(c.Sections))],
+		l.X, l.Z,
+		l.LastUpdate,
+		l.TerrainPopulated,
+		l.HeightMap[:Min(6, len(l.HeightMap))],
+		// l.Sections[:Min(6, len(l.Sections))],
 	)
 }
 
-func Min(a ...int) (min int) {
-	min = math.MaxInt32
-	for _, i := range a {
-		if i < min {
-			min = i
-		}
-	}
-	return
+func (l Level) GetPos() (int, int) {
+	return int(l.X), int(l.Z)
 }
 
 func (l *Level) Read(r io.Reader) {
@@ -207,6 +186,16 @@ func (l *Level) Bounds() image.Rectangle {
 	x0, y0 := int(l.X << 5 + l.Z << 5), int(-(l.X << 4) + (l.Z + 1) << 4)
 	x1, y1 := int((l.X + 1) << 5 + (l.Z + 1) << 5), int(-(l.X + 1) << 4 - y << 1 + l.Z << 4)
 	return image.Rect(x0 - 2, y0 + 2, x1 - 2, y1)
+}
+
+func Min(a ...int) (min int) {
+	min = math.MaxInt32
+	for _, i := range a {
+		if i < min {
+			min = i
+		}
+	}
+	return
 }
 
 func ProjectIsometric(x, y, z int) (xI, yI int) {
@@ -260,6 +249,8 @@ func DrawBlock(img *image.RGBA, x, y int, c BlockColor) {
 	if c.Alpha != 0xFF {
 		draw.DrawMask(img, blockImg.Bounds(), blockImg, image.Pt(x - 2, y), image.NewUniform(color.RGBA{c.Alpha, c.Alpha, c.Alpha, c.Alpha}), image.Pt(x - 2, y), draw.Over)
 	}
+	
+	return
 }
 
 func (l Level) Draw(img *image.RGBA) {
@@ -280,7 +271,7 @@ func (l Level) Draw(img *image.RGBA) {
 type Job struct {
 	Filename string
 	ChunkCount int
-	Chunks ChunkList
+	Chunks PositionList
 }
 
 func Alloc() uint64 {
@@ -302,10 +293,10 @@ func init() {
 
 func main() {
 	defer func() {
-		recover()
-		fmt.Println()
-		flag.Usage()
-		os.Exit(1)
+		if recover() != nil {
+			fmt.Println()
+			flag.Usage()
+		}
 	}()
 	
 	var dir, outFilename string
@@ -327,7 +318,7 @@ func main() {
 	errhandler.Handle("Error globbing region files: ", err)
 	
 	var (
-		regions RegionList
+		regions PositionList
 		imgBounds image.Rectangle
 		chunkBounds image.Rectangle
 	)
@@ -351,14 +342,15 @@ func main() {
 	work := make(chan Job)
 	
 	go func(work chan Job) {
-		for _, region := range regions {
+		for _, r := range regions {
+			region := r.(Region)
 			regionFile, err := os.Open(region.Path)
 			errhandler.Handle("Error opening region file: ", err)
 			
 			var header Header
 			header.Read(regionFile)
 			
-			var chunks ChunkList
+			var chunks PositionList
 			for _, location := range header.Locations {
 				if location.Length != 0 {
 					chunkSection := io.NewSectionReader(regionFile, int64(location.Offset) << 12, int64(location.Length) << 12)
@@ -383,7 +375,8 @@ func main() {
 	for job := range work {
 		fmt.Printf("Parsing: %s\n", job.Filename)
 		fmt.Printf("\tFound %d populated chunks\n", job.ChunkCount)
-		for i, chunk := range job.Chunks {
+		for i, c := range job.Chunks {
+			chunk := c.(Level)
 			if chunkBounds == image.Rect(0, 0, 0, 0) {
 				chunkBounds = chunk.Bounds()
 			} else {
