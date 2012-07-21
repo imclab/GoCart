@@ -270,6 +270,7 @@ func (l Level) Draw(img *image.RGBA) {
 
 type Job struct {
 	Filename string
+	Index int
 	ChunkCount int
 	Chunks PositionList
 }
@@ -342,7 +343,7 @@ func main() {
 	work := make(chan Job)
 	
 	go func(work chan Job) {
-		for _, r := range regions {
+		for i, r := range regions {
 			region := r.(Region)
 			regionFile, err := os.Open(region.Path)
 			errhandler.Handle("Error opening region file: ", err)
@@ -367,13 +368,13 @@ func main() {
 			regionFile.Close()
 			
 			sort.Sort(chunks)
-			work <- Job{filepath.Base(region.Path), len(chunks), chunks}
+			work <- Job{filepath.Base(region.Path), i + 1, len(chunks), chunks}
 		}
 		close(work)
 	}(work)
 	
 	for job := range work {
-		fmt.Printf("Parsing: %s\n", job.Filename)
+		fmt.Printf("Parsing: %s (%d/%d)\n", job.Filename, job.Index, len(regions))
 		fmt.Printf("\tFound %d populated chunks\n", job.ChunkCount)
 		for i, c := range job.Chunks {
 			chunk := c.(Level)
